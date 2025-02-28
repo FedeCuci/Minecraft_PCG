@@ -54,21 +54,17 @@ def find_flattest_subarray(large_array, sub_array_size):
             # print(f'Average gradient: {avg_gradient}')
             # input()
 
-            # If this sub-array is flatter than the flattest one found so far, update
+            # If this sub-array is flatter than the flattest one found so far and there is no water, update
             if avg_gradient < min_gradient_magnitude and np.all(current_water_subarray == 0):
 
                 min_gradient_magnitude = avg_gradient
                 flattest_subarray = current_subarray.copy()  # Make a copy to avoid reference issues
                 flattest_position = (start_row, start_col)
                 max_value = np.max(current_subarray)
-
-                max_value = np.max(current_subarray)
     
     if flattest_position is None:
         print('There is not flat enough surface that is not on water')
         exit()
-
-    # print(coordinate_array)
 
     return flattest_subarray, flattest_position, min_gradient_magnitude, max_value
 
@@ -79,9 +75,23 @@ def place_block(position, process_area):
     # relative_x = optimal_x - STARTX
     # relative_z = optimal_z - STARTY
 
-    # print(relative_x, relative_z)
-
     heights = WORLDSLICE.heightmaps["MOTION_BLOCKING_NO_LEAVES"]
+
+    max_local_height = 0
+
+    for dx in range(process_area):
+        for dz in range(process_area):
+            # Calculate world coordinates
+            world_x = STARTX + optimal_x + dx
+            world_z = STARTZ + optimal_z + dz
+            
+            # Get height at this position
+            local_x = optimal_x + dx
+            local_z = optimal_z + dz
+            height = heights[(local_x, local_z)]
+
+            if height > max_local_height:
+                max_local_height = height
 
     # Fill the entire optimal area with cobblestone
     for dx in range(process_area):
@@ -93,10 +103,10 @@ def place_block(position, process_area):
             # Get height at this position
             local_x = optimal_x + dx
             local_z = optimal_z + dz
-            height = heights[(local_z, local_x)]  # Note: heightmap indices are (x,z)
+            height = heights[(local_x, local_z)]  # Note: heightmap indices are (x,z)
             
             # Place cobblestone blocks from the ground up to 3 blocks high
-            for y in range(height, height + 4):  # You can adjust the +3 to change wall height
+            for y in range(height, max_local_height):  # You can adjust the +3 to change wall height
                 ED.placeBlock((world_x, y, world_z), Block("cobblestone"))
 
     
