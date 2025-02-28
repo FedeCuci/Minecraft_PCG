@@ -73,8 +73,8 @@ def find_flattest_subarray(large_array, sub_array_size):
     return flattest_subarray, flattest_position, min_gradient_magnitude, max_value
 
 def place_block(position, process_area):
-    optimal_x = position[1] # x is the column
-    optimal_z = position[0] # y is the row
+    optimal_x = position[0] # x is the column
+    optimal_z = position[1] # y is the row
 
     # relative_x = optimal_x - STARTX
     # relative_z = optimal_z - STARTY
@@ -93,7 +93,7 @@ def place_block(position, process_area):
             # Get height at this position
             local_x = optimal_x + dx
             local_z = optimal_z + dz
-            height = heights[(local_x, local_z)]  # Note: heightmap indices are (x,z)
+            height = heights[(local_z, local_x)]  # Note: heightmap indices are (x,z)
             
             # Place cobblestone blocks from the ground up to 3 blocks high
             for y in range(height, height + 4):  # You can adjust the +3 to change wall height
@@ -121,22 +121,22 @@ if __name__ == "__main__":
     
     # Visualize the results
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    
-    # Plot the entire heightmap
-    im0 = axes[0].imshow(heightmap, cmap='inferno')
+
+    # Plot the entire heightmap - transposed
+    im0 = axes[0].imshow(heightmap.T, cmap='inferno')  # Added .T here
     axes[0].set_title("Original Heightmap")
     fig.colorbar(im0, ax=axes[0])
-    
+
     # Highlight the flattest region
     start_row, start_col = position
-    rect = plt.Rectangle((start_col - 0.5, start_row - 0.5), sub_array_size, sub_array_size, 
-                         edgecolor='red', facecolor='none', linewidth=2)
+    rect = plt.Rectangle((start_row - 0.5, start_col - 0.5), sub_array_size, sub_array_size,  # Swapped start_row and start_col
+                        edgecolor='red', facecolor='none', linewidth=2)
     axes[0].add_patch(rect)
-    
-    # Plot the flattest sub-array
-    im1 = axes[1].imshow(flattest_subarray, cmap='inferno')
+
+    # Plot the flattest sub-array - transposed
+    im1 = axes[1].imshow(flattest_subarray.T, cmap='inferno')  # Added .T here
     axes[1].set_title(f"Flattest {sub_array_size}x{sub_array_size} Sub-array")
     fig.colorbar(im1, ax=axes[1])
-    
+
     plt.tight_layout()
     plt.show()
