@@ -17,6 +17,43 @@ STARTX, STARTY, STARTZ = BUILD_AREA.begin
 LASTX, LASTY, LASTZ = BUILD_AREA.last
 WORLDSLICE = ED.loadWorldSlice(BUILD_AREA.toRect(), cache=True)
 
+def smooth_heightmap(heightmap, window_size=3, threshold=2):
+    """
+    Smooths the heightmap by replacing outlier values with the median of surrounding values.
+    
+    Args:
+        heightmap: 2D numpy array of height values
+        window_size: Size of the sliding window (must be odd number)
+        threshold: Number of standard deviations from local median to be considered an outlier
+    
+    Returns:
+        Smoothed heightmap array
+    """
+    # Create a copy of the original heightmap
+    smoothed = heightmap.copy()
+    rows, cols = heightmap.shape
+    pad = window_size // 2
+
+    # Pad the array to handle edges
+    padded = np.pad(heightmap, pad, mode='edge')
+
+    # Iterate through each cell in the original heightmap
+    for i in range(rows):
+        for j in range(cols):
+            # Extract the local window
+            window = padded[i:i + window_size, j:j + window_size]
+            
+            # Calculate local statistics
+            local_median = np.median(window)
+            local_std = np.std(window)
+            
+            # Check if the center value is an outlier
+            center_value = heightmap[i, j]
+            if abs(center_value - local_median) > threshold * local_std:
+                # Replace with local median if it's an outlier
+                smoothed[i, j] = local_median
+
+    return smoothed
 
 def find_flattest_subarray(large_array, sub_array_size):
     # Get array dimensions
@@ -36,7 +73,7 @@ def find_flattest_subarray(large_array, sub_array_size):
     min_gradient_magnitude = float('inf')  # Start with infinity
 
     water_array = WORLDSLICE.heightmaps['MOTION_BLOCKING'] - WORLDSLICE.heightmaps['OCEAN_FLOOR']
-    print(water_array)
+    leaves_array = WORLDSLICE.heightmaps['MOTION_BLOCKING'] - WORLDSLICE.heightmaps['MOTION_BLOCKING_NO_LEAVES']
     
     # Iterate over all valid starting positions
     for start_row in range(max_start_row + 1):
@@ -50,11 +87,6 @@ def find_flattest_subarray(large_array, sub_array_size):
             gradient_magnitude = np.sqrt(gx**2 + gy**2)
             avg_gradient = np.mean(gradient_magnitude)
 
-            # print(current_subarray)
-            # print(f'Max value: {np.max(current_subarray)}')
-            # print(f'Average gradient: {avg_gradient}')
-            # input()
-
             # If this sub-array is flatter than the flattest one found so far and there is no water, update
             if avg_gradient < min_gradient_magnitude and np.all(current_water_subarray == 0):
 
@@ -66,6 +98,38 @@ def find_flattest_subarray(large_array, sub_array_size):
     if flattest_position is None:
         print('There is not flat enough surface that is not on water')
         exit()
+
+    # Check for leaves in the optimal area
+    start_row, start_col = flattest_position
+    optimal_area_leaves = leaves_array[start_row:start_row + sub_array_size, 
+                                     start_col:start_col + sub_array_size]
+    trees_present = np.any(optimal_area_leaves > 0)
+
+    if trees_present:
+        # Usage in your code:
+        heightmap = WORLDSLICE.heightmaps["MOTION_BLOCKING_NO_LEAVES"]
+        smoothed_heightmap = smooth_heightmap(heightmap, window_size=7, threshold=2)
+
+        print("Clearing trees in and around the optimal area...")
+        
+        # Define clearing margin (how many extra blocks to clear on each side)
+        margin = 3  # Adjust this value to clear a larger or smaller area
+        
+        # Get array dimensions
+        rows, cols = smoothed_heightmap.shape
+        
+        # Clear everything above the foundation height in the expanded area
+        for dx in range(max(0, start_row - margin), min(rows, start_row + sub_array_size + margin)):
+            for dz in range(max(0, start_col - margin), min(cols, start_col + sub_array_size + margin)):
+                world_x = STARTX + dx
+                world_z = STARTZ + dz
+                
+                # Get the height from smoothed_heightmap at this position
+                local_height = smoothed_heightmap[dx, dz]
+                
+                # Clear from local smoothed height up to a reasonable height
+                for y in range(int(local_height), int(local_height) + 20):
+                    ED.placeBlock((world_x, y, world_z), Block("air"))
 
     return flattest_subarray, flattest_position, min_gradient_magnitude, max_value
 
@@ -120,12 +184,12 @@ if __name__ == "__main__":
     heightmap = WORLDSLICE.heightmaps["MOTION_BLOCKING_NO_LEAVES"] # The top non-air solid blocks.
     
     # Find the flattest 10x10 sub-array
-    sub_array_size = random.randint(6, 14)
+    sub_array_size = random.randint(6, 8)
     flattest_subarray, position, flatness_value, max_value = find_flattest_subarray(heightmap, sub_array_size)
     place_block(position, sub_array_size)
     
-    print(f"The flattest {sub_array_size}x{sub_array_size} sub-array starts at position {position}")
-    print(f"Average gradient magnitude (flatness value): {flatness_value:.4f}")
+    # print(f"The flattest {sub_array_size}x{sub_array_size} sub-array starts at position {position}")
+    # print(f"Average gradient magnitude (flatness value): {flatness_value:.4f}")
     
     # Visualize the results
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
