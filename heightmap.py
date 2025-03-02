@@ -36,6 +36,7 @@ def find_flattest_subarray(large_array, sub_array_size):
     min_gradient_magnitude = float('inf')  # Start with infinity
 
     water_array = WORLDSLICE.heightmaps['MOTION_BLOCKING'] - WORLDSLICE.heightmaps['OCEAN_FLOOR']
+    print(water_array)
     
     # Iterate over all valid starting positions
     for start_row in range(max_start_row + 1):
@@ -109,9 +110,6 @@ def place_block(position, process_area):
             for y in range(height, max_local_height):  # You can adjust the +3 to change wall height
                 ED.placeBlock((world_x, y, world_z), Block("cobblestone"))
 
-    
-
-
     # ED.placeBlock((relative_x, path_y, relative_z), Block("cobblestone"))
 
 # Example usage
@@ -122,7 +120,7 @@ if __name__ == "__main__":
     heightmap = WORLDSLICE.heightmaps["MOTION_BLOCKING_NO_LEAVES"] # The top non-air solid blocks.
     
     # Find the flattest 10x10 sub-array
-    sub_array_size = random.randint(6, 10)
+    sub_array_size = random.randint(6, 14)
     flattest_subarray, position, flatness_value, max_value = find_flattest_subarray(heightmap, sub_array_size)
     place_block(position, sub_array_size)
     
