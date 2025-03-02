@@ -17,18 +17,51 @@ STARTX, STARTY, STARTZ = BUILD_AREA.begin
 LASTX, LASTY, LASTZ = BUILD_AREA.last
 WORLDSLICE = ED.loadWorldSlice(BUILD_AREA.toRect(), cache=True)
 
+def smooth_heightmap(heightmap, window_size=3, threshold=2):
+    # Create a copy of the original heightmap
+    smoothed = heightmap.copy()
+    rows, cols = heightmap.shape
+    pad = window_size // 2
+
+    # Pad the array to handle edges
+    padded = np.pad(heightmap, pad, mode='edge')
+
+    # Iterate through each cell in the original heightmap
+    for i in range(rows):
+        for j in range(cols):
+            # Extract the local window
+            window = padded[i:i + window_size, j:j + window_size]
+            
+            # Calculate local statistics
+            local_median = np.median(window)
+            local_std = np.std(window)
+            
+            # Check if the center value is an outlier
+            center_value = heightmap[i, j]
+            if abs(center_value - local_median) > threshold * local_std:
+                # Replace with local median if it's an outlier
+                smoothed[i, j] = local_median
+
+    return smoothed
 
 def find_flattest_subarray(large_array, sub_array_size):
     # Get array dimensions
     num_rows, num_cols = large_array.shape
+    smoothed_heightmap = None
+    margin = random.randint(4, 8)  # Random margin between 4-8 blocks
+    border_margin = 4  # Minimum distance from the border
     
-    # Check if sub-array size is valid
-    if sub_array_size > num_rows or sub_array_size > num_cols:
-        raise ValueError("Sub-array size is larger than the original array.")
+    # Check if sub-array size plus margins is valid
+    if sub_array_size + 2 * border_margin > num_rows or sub_array_size + 2 * border_margin > num_cols:
+        print("Warning: Build area is too small with the requested margins.")
+        # Adjust sub_array_size if needed
+        sub_array_size = min(num_rows, num_cols) - 2 * border_margin
+        if sub_array_size < 4:  # If it's too small to build anything meaningful
+            raise ValueError("Build area is too small to place a house with the required margins.")
     
-    # Calculate maximum starting positions
-    max_start_row = num_rows - sub_array_size
-    max_start_col = num_cols - sub_array_size
+    # Calculate maximum starting positions with border margin
+    max_start_row = num_rows - sub_array_size - border_margin
+    max_start_col = num_cols - sub_array_size - border_margin
     
     # Initialize variables to track flattest sub-array
     flattest_subarray = None
@@ -38,12 +71,14 @@ def find_flattest_subarray(large_array, sub_array_size):
     water_array = WORLDSLICE.heightmaps['MOTION_BLOCKING'] - WORLDSLICE.heightmaps['OCEAN_FLOOR']
     leaves_array = WORLDSLICE.heightmaps['MOTION_BLOCKING'] - WORLDSLICE.heightmaps['MOTION_BLOCKING_NO_LEAVES']
     
-    # Iterate over all valid starting positions
-    for start_row in range(max_start_row + 1):
-        for start_col in range(max_start_col + 1):
+    # Iterate over all valid starting positions, respecting the border margin
+    for start_row in range(border_margin, max_start_row + 1):
+        for start_col in range(border_margin, max_start_col + 1):
             # Extract the current sub-array
-            current_subarray = large_array[start_row:start_row + sub_array_size, start_col:start_col + sub_array_size]
-            current_water_subarray = water_array[start_row:start_row + sub_array_size, start_col:start_col + sub_array_size]
+            current_subarray = large_array[start_row:start_row + sub_array_size, 
+                                          start_col:start_col + sub_array_size]
+            current_water_subarray = water_array[start_row:start_row + sub_array_size, 
+                                               start_col:start_col + sub_array_size]
             
             # Calculate the gradient magnitude for this sub-array
             gy, gx = np.gradient(current_subarray)
@@ -52,30 +87,129 @@ def find_flattest_subarray(large_array, sub_array_size):
 
             # If this sub-array is flatter than the flattest one found so far and there is no water, update
             if avg_gradient < min_gradient_magnitude and np.all(current_water_subarray == 0):
+                min_gradient_magnitude = avg_gradient
+                flattest_position = (start_row, start_col)
+                flattest_subarray = current_subarray.copy()  # Make a copy to avoid
+
+            # If this sub-array is flatter than the flattest one found so far and there is no water, update
+            if avg_gradient < min_gradient_magnitude and np.all(current_water_subarray == 0):
 
                 min_gradient_magnitude = avg_gradient
                 flattest_position = (start_row, start_col)
-    
-    # Check for leaves in the optimal area
-    start_row, start_col = flattest_position
-    optimal_area_leaves = leaves_array[start_row:start_row + sub_array_size, start_col:start_col + sub_array_size]
-    trees_present = np.any(optimal_area_leaves > 0)
-    print(trees_present)
+                flattest_subarray = current_subarray.copy()  # Make a copy to avoid reference issues
     
     if flattest_position is None:
         print('There is not flat enough surface that is not on water')
         exit()
 
-    return flattest_position
+    # Check for leaves in the optimal area
+    start_row, start_col = flattest_position
+    optimal_area_leaves = leaves_array[start_row:start_row + sub_array_size, 
+                                     start_col:start_col + sub_array_size]
+    trees_present = np.any(optimal_area_leaves > 0)
 
-def place_block(position, process_area):
+    if trees_present:
+        # Usage in your code:
+        heightmap = WORLDSLICE.heightmaps["MOTION_BLOCKING_NO_LEAVES"]
+        smoothed_heightmap = smooth_heightmap(heightmap, window_size=7, threshold=2)
+
+        print("Clearing trees in and around the optimal area...")
+        
+        # Get array dimensions
+        rows, cols = smoothed_heightmap.shape
+        
+        # Clear everything above the foundation height in the expanded area
+        for dx in range(max(0, start_row - margin), min(rows, start_row + sub_array_size + margin)):
+            for dz in range(max(0, start_col - margin), min(cols, start_col + sub_array_size + margin)):
+                world_x = STARTX + dx
+                world_z = STARTZ + dz
+                
+                # Get the height from smoothed_heightmap at this position
+                local_height = smoothed_heightmap[dx, dz]
+                
+                # Clear from local smoothed height up to a reasonable height
+                for y in range(int(local_height), int(local_height) + 20):
+                    ED.placeBlock((world_x, y, world_z), Block("air"))
+
+    return flattest_position, smoothed_heightmap, flattest_subarray
+
+def create_material_palettes():
+    """Create a collection of different material palettes for house building."""
+    return [
+        {
+            "foundation": "cobblestone",
+            "floor_primary": "dark_oak_planks",
+            "floor_secondary": "birch_planks",
+            "walls": "stone",
+            "pillars": "spruce_log",
+            "roof_frame": "spruce_planks",
+            "roof_material": "dark_oak_stairs",
+            "roof_ridge": "dark_oak_planks",
+            "door": "spruce_door",
+            "window_pane": "glass_pane",
+            "window_sill": "spruce_trapdoor",
+            "chimney": "bricks"
+        },
+        {
+            "foundation": "stone_bricks",
+            "floor_primary": "oak_planks",
+            "floor_secondary": "spruce_planks",
+            "walls": "stripped_oak_log",
+            "pillars": "oak_log",
+            "roof_frame": "oak_planks",
+            "roof_material": "spruce_stairs",
+            "roof_ridge": "spruce_planks",
+            "door": "oak_door",
+            "window_pane": "glass_pane",
+            "window_sill": "oak_trapdoor",
+            "chimney": "stone_bricks"
+        },
+        {
+            "foundation": "deepslate_bricks",
+            "floor_primary": "spruce_planks",
+            "floor_secondary": "dark_oak_planks",
+            "walls": "deepslate_tiles",
+            "pillars": "dark_oak_log",
+            "roof_frame": "dark_oak_planks",
+            "roof_material": "spruce_stairs",
+            "roof_ridge": "spruce_planks",
+            "door": "dark_oak_door",
+            "window_pane": "tinted_glass",
+            "window_sill": "dark_oak_trapdoor",
+            "chimney": "deepslate_bricks"
+        },
+        {
+            "foundation": "sandstone",
+            "floor_primary": "smooth_sandstone",
+            "floor_secondary": "cut_sandstone",
+            "walls": "sandstone",
+            "pillars": "birch_log",
+            "roof_frame": "birch_planks",
+            "roof_material": "birch_stairs",
+            "roof_ridge": "smooth_sandstone",
+            "door": "birch_door",
+            "window_pane": "glass_pane",
+            "window_sill": "birch_trapdoor",
+            "chimney": "terracotta"
+        }
+    ]
+
+def place_block(position, process_area, smoothed_heightmap):
+    # Select a random material palette
+    palettes = create_material_palettes()
+    palette = random.choice(palettes)
+    
     optimal_x = position[0] # x is the column
     optimal_z = position[1] # y is the row
 
-    heights = WORLDSLICE.heightmaps["MOTION_BLOCKING_NO_LEAVES"]
+    if smoothed_heightmap is not None:
+        heights = smoothed_heightmap
+    else:
+        heights = WORLDSLICE.heightmaps["MOTION_BLOCKING_NO_LEAVES"]
 
     max_local_height = 0
 
+    # First, determine the maximum height in the area
     for dx in range(process_area):
         for dz in range(process_area):
             # Calculate world coordinates
@@ -90,7 +224,7 @@ def place_block(position, process_area):
             if height > max_local_height:
                 max_local_height = height
 
-    # Fill the entire optimal area with cobblestone
+    # Fill the entire optimal area with foundation material
     for dx in range(process_area):
         for dz in range(process_area):
             # Calculate world coordinates
@@ -102,27 +236,53 @@ def place_block(position, process_area):
             local_z = optimal_z + dz
             height = heights[(local_x, local_z)]  # Note: heightmap indices are (x,z)
 
+            # Clear any existing blocks above the foundation
             for y in range(height + 1, height + 20):
                 ED.placeBlock((world_x, y, world_z), Block("air"))
             
-            # Place cobblestone blocks from the ground up to 3 blocks high
-            for y in range(height, max_local_height):  # You can adjust the +3 to change wall height
-                ED.placeBlock((world_x, y, world_z), Block("cobblestone"))
+            # Place foundation blocks from the ground up to max_local_height
+            for y in range(height, max_local_height + 1):  # +1 to ensure a flat top surface
+                ED.placeBlock((world_x, y, world_z), Block(palette["foundation"]))
     
-    # Calculate cottage dimensions
-    start_x = STARTX + optimal_x + 1  # Inset by 1 from the foundation edge
-    start_z = STARTZ + optimal_z + 1
-    width = process_area - 2  # Leave 1 block margin on each side
-    length = process_area - 2
-    wall_height = 4  # You can adjust this value
+    # Calculate house dimensions - make it smaller than the foundation
+    # Add a margin of at least 1 block on each side
+    margin = 1
+    house_width = process_area - 2 * margin
+    house_length = process_area - 2 * margin
+    
+    # Ensure house dimensions are at least 4x4
+    if house_width < 4 or house_length < 4:
+        print("Warning: Foundation too small for a proper house. Adjusting dimensions.")
+        house_width = max(4, house_width)
+        house_length = max(4, house_length)
+        margin = max(1, (process_area - house_width) // 2)
+    
+    # Calculate starting position for the house (centered on the foundation)
+    start_x = STARTX + optimal_x + margin
+    start_z = STARTZ + optimal_z + margin
+    wall_height = random.randint(4, 7)  # You can adjust this value
 
-    # Build the cottage components
-    build_walls(ED, start_x, start_z, max_local_height, width, length, wall_height)
-    build_roof(ED, start_x, start_z, max_local_height, width, length, wall_height)
-    add_details(ED, start_x, start_z, max_local_height, width, length, wall_height)
-    add_interior(ED, start_x, start_z, max_local_height, width, length, wall_height)
+    # Add checkered floor pattern for the house area
+    for dx in range(house_width):
+        for dz in range(house_length):
+            world_x = start_x + dx
+            world_z = start_z + dz
+            # Place floor at max_local_height + 1 (one block above the foundation)
+            if (dx + dz) % 2 == 0:
+                ED.placeBlock((world_x, max_local_height, world_z), Block(palette["floor_primary"]))
+            else:
+                ED.placeBlock((world_x, max_local_height, world_z), Block(palette["floor_secondary"]))
 
-def build_walls(ED, start_x, start_z, y, width, length, height):
+    # Adjust the starting height for walls to be one block higher than the foundation
+    floor_height = max_local_height + 1
+    
+    # Then pass the palette to your building functions with the adjusted dimensions
+    build_walls(ED, start_x, start_z, floor_height, house_width - 1, house_length - 1, wall_height, palette)
+    build_roof(ED, start_x, start_z, floor_height, house_width - 1, house_length - 1, wall_height, palette)
+    add_details(ED, start_x, start_z, floor_height, house_width - 1, house_length - 1, wall_height, palette)
+    add_interior(ED, start_x, start_z, floor_height, house_width - 1, house_length - 1, wall_height, palette)
+
+def build_walls(ED, start_x, start_z, y, width, length, height, palette):
     """Build walls starting from the top-left corner."""
     print("Building walls...")
     
@@ -133,14 +293,14 @@ def build_walls(ED, start_x, start_z, y, width, length, height):
             ED,
             (x, y - 1, start_z),
             (x, y + height - 1, start_z),
-            Block("stone")
+            Block(palette["walls"])
         )
         # Back wall
         geo.placeCuboid(
             ED,
             (x, y - 1, start_z + length),
             (x, y + height - 1, start_z + length),
-            Block("stone")
+            Block(palette["walls"])
         )
     
     # Side walls
@@ -150,14 +310,14 @@ def build_walls(ED, start_x, start_z, y, width, length, height):
             ED,
             (start_x, y - 1, z),
             (start_x, y + height - 1, z),
-            Block("stone")
+            Block(palette["walls"])
         )
         # Right wall
         geo.placeCuboid(
             ED,
             (start_x + width, y - 1, z),
             (start_x + width, y + height - 1, z),
-            Block("stone")
+            Block(palette["walls"])
         )
     
     # Corner pillars
@@ -167,10 +327,10 @@ def build_walls(ED, start_x, start_z, y, width, length, height):
                 ED,
                 (x, y - 1, z),
                 (x, y + height - 1, z),
-                Block("spruce_log", {"axis": "y"})
+                Block(palette["pillars"], {"axis": "y"})
             )
 
-def build_roof(ED, start_x, start_z, y, width, length, height):
+def build_roof(ED, start_x, start_z, y, width, length, height, palette):
     print("Building roof...")
     # Triangular gables
     for i in range(width//2 + 1):
@@ -179,14 +339,14 @@ def build_roof(ED, start_x, start_z, y, width, length, height):
             ED,
             (start_x + i, y + height - 1 + i, start_z),
             (start_x + width - i, y + height - 1 + i, start_z),
-            Block("spruce_planks")
+            Block(palette["roof_frame"])
         )
         # Back gable
         geo.placeCuboid(
             ED,
             (start_x + i, y + height - 1 + i, start_z + length),
             (start_x + width - i, y + height - 1 + i, start_z + length),
-            Block("spruce_planks")
+            Block(palette["roof_frame"])
         )
     
     # Roof slopes
@@ -197,7 +357,7 @@ def build_roof(ED, start_x, start_z, y, width, length, height):
                 ED,
                 (start_x + width//2, y + height + i - 1, start_z - 1),
                 (start_x + width//2, y + height + i - 1, start_z + length + 1),
-                Block("dark_oak_planks")
+                Block(palette["roof_ridge"])
             )
         else:
             # Left slope
@@ -205,18 +365,19 @@ def build_roof(ED, start_x, start_z, y, width, length, height):
                 ED,
                 (start_x + i, y + height + i, start_z - 1),
                 (start_x + i, y + height + i, start_z + length + 1),
-                Block("dark_oak_stairs", {"facing": "east"})
+                Block(palette["roof_material"], {"facing": "east"})
             )
             # Right slope
             geo.placeCuboid(
                 ED,
                 (start_x + width - i, y + height + i, start_z - 1),
                 (start_x + width - i, y + height + i, start_z + length + 1),
-                Block("dark_oak_stairs", {"facing": "west"})
+                Block(palette["roof_material"], {"facing": "west"})
             )
 
-def add_details(ED, start_x, start_z, y, width, length, height):
+def add_details(ED, start_x, start_z, y, width, length, height, palette):
     print("Adding details...")
+
     # Door (in the middle of the front wall)
     door_x = start_x
     door_z = start_z + length//2
@@ -236,20 +397,30 @@ def add_details(ED, start_x, start_z, y, width, length, height):
         window_positions.append((start_x + x_offset, start_z))  # Front wall
         window_positions.append((start_x + x_offset, start_z + length))  # Back wall
     
+    # Calculate window height based on wall height
+    window_height = max(2, height - 3)  # At least 2 blocks tall, but scales with wall height
+    window_start_y = y + 1  # Start windows 1 block above the floor
+    
     for wx, wz in window_positions:
         # Skip if it's the door position
         if not (wx == door_x and wz == door_z):
-            ED.placeBlock((wx, y + 1, wz), Block("glass_pane"))
-            ED.placeBlock((wx, y + 2, wz), Block("glass_pane"))
+            # Place window panes with variable height
+            for wy in range(window_start_y, window_start_y + window_height):
+                ED.placeBlock((wx, wy, wz), Block(palette["window_pane"]))
             
-            # Determine facing direction for trapdoors
+            # Determine facing direction for window sills
             facing = "north"
             if wz == start_z: facing = "south"  # Front wall
             elif wz == start_z + length: facing = "north"  # Back wall
             elif wx == start_x: facing = "east"  # Left wall
             elif wx == start_x + width: facing = "west"  # Right wall
             
-            ED.placeBlock((wx, y, wz), Block("spruce_trapdoor", {"facing": facing, "half": "top"}))
+            # Add window sill at the bottom
+            ED.placeBlock((wx, window_start_y - 1, wz), Block(palette["window_sill"], {"facing": facing, "half": "top"}))
+            
+            # Optionally add a decorative element above the window
+            if window_height < height - 3:  # If there's space above the window
+                ED.placeBlock((wx, window_start_y + window_height, wz), Block(palette["window_sill"], {"facing": facing, "half": "bottom"}))
     
     # Chimney
     chimney_x = start_x + width - 2
@@ -265,7 +436,7 @@ def add_details(ED, start_x, start_z, y, width, length, height):
         Block("campfire", {"lit": "true"})
     )
 
-def add_interior(ED, start_x, start_z, y, width, length, height):
+def add_interior(ED, start_x, start_z, y, width, length, height, palette):
     print("Adding interior decorations...")
     
     # Plants with support blocks
@@ -310,6 +481,40 @@ if __name__ == "__main__":
     heightmap = WORLDSLICE.heightmaps["MOTION_BLOCKING_NO_LEAVES"] # The top non-air solid blocks.
     
     # Find the flattest 10x10 sub-array
-    sub_array_size = random.randint(12, 18)
-    position = find_flattest_subarray(heightmap, sub_array_size)
-    place_block(position, sub_array_size)
+    
+    sub_array_size = random.randint(10, 14)
+    position, smoothed_heightmap, flattest_subarray = find_flattest_subarray(heightmap, sub_array_size)
+    place_block(position, sub_array_size, smoothed_heightmap)
+
+    # Visualize the results
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    # Plot the entire heightmap - transposed
+    im0 = axes[0].imshow(heightmap.T, cmap='inferno')  # Added .T here
+    axes[0].set_title("Original Heightmap")
+    fig.colorbar(im0, ax=axes[0])
+
+    # Highlight the flattest region
+    start_row, start_col = position
+    rect = plt.Rectangle((start_row - 0.5, start_col - 0.5), sub_array_size, sub_array_size,  # Swapped start_row and start_col
+                        edgecolor='red', facecolor='none', linewidth=2)
+    axes[0].add_patch(rect)
+
+    # Plot the flattest sub-array - transposed
+    im1 = axes[1].imshow(flattest_subarray.T, cmap='inferno')  # Added .T here
+    axes[1].set_title(f"Flattest {sub_array_size}x{sub_array_size} Sub-array")
+    fig.colorbar(im1, ax=axes[1])
+
+    rect = plt.Rectangle((start_row - 0.5, start_col - 0.5), sub_array_size, sub_array_size,
+                    edgecolor='red', facecolor='none', linewidth=2)
+    axes[0].add_patch(rect)
+
+    # # Add a rectangle showing the border margin
+    # border_rect = plt.Rectangle((border_margin - 0.5, border_margin - 0.5), 
+    #                         num_rows - 2 * border_margin, 
+    #                         num_cols - 2 * border_margin,
+    #                         edgecolor='blue', facecolor='none', linestyle='--', linewidth=1)
+    # axes[0].add_patch(border_rect)
+
+    plt.tight_layout()
+    plt.show()
